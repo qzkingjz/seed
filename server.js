@@ -9,6 +9,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const publicDir = path.join(__dirname, "public");
 const uploadsDir = path.join(__dirname, "generated", "uploads");
+const historyFilePath = path.join(__dirname, "generated", "task-history.json");
 
 class AppError extends Error {
   constructor(message, statusCode = 500, details = undefined) {
@@ -96,6 +97,7 @@ const config = {
   chatCompletionsPath: process.env.SEEDANCE_CHAT_COMPLETIONS_PATH || "/chat/completions",
   port: Number.parseInt(process.env.PORT ?? "3000", 10),
   pollIntervalMs: Number.parseInt(process.env.POLL_INTERVAL_MS ?? "3000", 10),
+  historyLimit: Number.parseInt(process.env.TASK_HISTORY_LIMIT ?? "100", 10),
   allowedOrigin: process.env.ALLOWED_ORIGIN ?? "",
   publicBaseUrl: (process.env.PUBLIC_BASE_URL ?? "").replace(/\/+$/, ""),
   ossRegion: process.env.OSS_REGION ?? "",
@@ -160,12 +162,18 @@ const modeDefinitions = {
   draft_to_final: {
     label: "样片生成成片",
   },
+  grok_imagine: {
+    label: "Grok Imagine Video",
+  },
 };
 
 const enumValues = {
   mode: Object.keys(modeDefinitions),
   resolution: ["480p", "720p", "1080p"],
+  grokResolution: ["480p", "720p"],
   aspect_ratio: ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9", "adaptive"],
+  grokAspectRatio: ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"],
+  grokSize: ["848x480", "1696x960", "1280x720", "1920x1080"],
 };
 
 const uploadLimits = {
@@ -495,44 +503,79 @@ function buildTaskPayload(payload) {
   const mode = payload.mode ?? "text_to_video";
   validateEnum(mode, "mode", enumValues.mode);
   const providerId = payload.provider || defaultProviderId;
+  if (mode === "grok_imagine" && providerId !== "ephone") {
+    throw new ValidationError("Grok Imagine Video is only available through the ephone provider");
+  }
 
   const prompt = validateString(payload.prompt, "prompt", { required: true, maxLength: 500 });
   const model = validateString(payload.model, "model", { required: true }) || config.model;
 
   const input = {
     prompt,
-    fps: 24,
   };
+  if (mode !== "grok_imagine") {
+    input.fps = 24;
+  }
 
   if (payload.duration !== undefined) {
-    validateInteger(payload.duration, "duration", { min: 4, max: 15 });
+    validateInteger(payload.duration, "duration", {
+      min: mode === "grok_imagine" ? 1 : 4,
+      max: 15,
+    });
     input.duration = payload.duration;
   }
 
-  if (payload.seed !== undefined) {
+  if (payload.seed !== undefined && mode !== "grok_imagine") {
     validateInteger(payload.seed, "seed", { min: -1, max: 2147483647 });
     input.seed = payload.seed;
   }
 
-  if (payload.execution_expires_after !== undefined) {
+  if (payload.execution_expires_after !== undefined && mode !== "grok_imagine") {
     validateInteger(payload.execution_expires_after, "execution_expires_after", { min: 60 });
     input.execution_expires_after = payload.execution_expires_after;
   }
 
   if (payload.resolution !== undefined) {
-    validateEnum(payload.resolution, "resolution", enumValues.resolution);
+    validateEnum(
+      payload.resolution,
+      "resolution",
+      mode === "grok_imagine" ? enumValues.grokResolution : enumValues.resolution,
+    );
     input.resolution = payload.resolution;
   }
 
   if (payload.aspect_ratio !== undefined) {
-    validateEnum(payload.aspect_ratio, "aspect_ratio", enumValues.aspect_ratio);
+    validateEnum(
+      payload.aspect_ratio,
+      "aspect_ratio",
+      mode === "grok_imagine" ? enumValues.grokAspectRatio : enumValues.aspect_ratio,
+    );
     input.aspect_ratio = payload.aspect_ratio;
   }
 
-  for (const key of ["draft", "watermark", "camera_fixed", "generate_audio", "return_last_frame"]) {
-    if (payload[key] !== undefined) {
-      validateBoolean(payload[key], key);
-      input[key] = payload[key];
+  if (mode === "grok_imagine") {
+    if (payload.size !== undefined) {
+      validateEnum(payload.size, "size", enumValues.grokSize);
+      input.size = payload.size;
+    }
+
+    if (payload.image_url) {
+      input.image = {
+        url: validateUrlString(payload.image_url, "image_url"),
+      };
+    }
+
+    if (payload.video_url) {
+      input.video = {
+        url: validateUrlString(payload.video_url, "video_url"),
+      };
+    }
+  } else {
+    for (const key of ["draft", "watermark", "camera_fixed", "generate_audio", "return_last_frame"]) {
+      if (payload[key] !== undefined) {
+        validateBoolean(payload[key], key);
+        input[key] = payload[key];
+      }
     }
   }
 
@@ -658,6 +701,7 @@ function summarizeInputForChat(input, mode) {
     "return_last_frame",
     "execution_expires_after",
     "draft_task_id",
+    "size",
   ];
 
   for (const field of scalarFields) {
@@ -680,6 +724,12 @@ function summarizeInputForChat(input, mode) {
   }
   if (input.reference_videos?.length) {
     lines.push(`reference_videos: ${input.reference_videos.join(", ")}`);
+  }
+  if (input.image?.url) {
+    lines.push(`image.url: ${input.image.url}`);
+  }
+  if (input.video?.url) {
+    lines.push(`video.url: ${input.video.url}`);
   }
 
   return lines.join("\n");
@@ -811,6 +861,72 @@ function normalizeTaskResponse(data) {
   };
 }
 
+async function readTaskHistory() {
+  try {
+    const raw = await readFile(historyFilePath, "utf8");
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed?.items) ? parsed.items : [];
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return [];
+    }
+    log("warn", "task_history_read_failed", { error: error.message });
+    return [];
+  }
+}
+
+async function writeTaskHistory(items) {
+  await mkdir(path.dirname(historyFilePath), { recursive: true });
+  await writeFile(
+    historyFilePath,
+    JSON.stringify(
+      {
+        version: 1,
+        updated_at: new Date().toISOString(),
+        items: items.slice(0, config.historyLimit),
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+}
+
+function createHistoryRecord(task, metadata = {}) {
+  const now = new Date().toISOString();
+  return {
+    id: task?.id || metadata.id,
+    status: normalizeStatus(task?.status),
+    prompt: metadata.prompt || "",
+    submittedModel: metadata.submittedModel || "",
+    submittedMode: metadata.submittedMode || "",
+    submittedProvider: metadata.submittedProvider || "",
+    created_at: task?.created_at || Math.floor(Date.now() / 1000),
+    completed_at: task?.completed_at,
+    outputs: Array.isArray(task?.outputs) ? task.outputs : [],
+    error: task?.error,
+    task,
+    updated_at: now,
+  };
+}
+
+async function upsertTaskHistory(task, metadata = {}) {
+  const id = task?.id || metadata.id;
+  if (!id) {
+    return;
+  }
+
+  const items = await readTaskHistory();
+  const existing = items.find((item) => item.id === id);
+  const record = createHistoryRecord(task, {
+    ...existing,
+    ...metadata,
+  });
+
+  const nextItems = [record, ...items.filter((item) => item.id !== id)];
+  await writeTaskHistory(nextItems);
+}
+
 function apiqikContentItem(type, url, role) {
   const urlKey = `${type}_url`;
   return {
@@ -940,6 +1056,15 @@ async function handleApiRequest(req, res, requestId) {
     return handleAssetUpload(req, res, requestId);
   }
 
+  if (req.method === "GET" && url.pathname === "/api/history") {
+    const items = await readTaskHistory();
+    return sendJson(res, 200, {
+      items,
+      limit: config.historyLimit,
+      requestId,
+    });
+  }
+
   if (req.method === "POST" && url.pathname === "/api/tasks") {
     const payload = await readJson(req);
     const provider = getProvider(payload.provider);
@@ -962,6 +1087,13 @@ async function handleApiRequest(req, res, requestId) {
             body: upstreamBody,
           });
 
+    await upsertTaskHistory(result, {
+      prompt: upstreamBody.input.prompt,
+      submittedModel: upstreamBody.model,
+      submittedMode: mode,
+      submittedProvider: provider.id,
+    });
+
     return sendJson(res, 200, {
       task: result,
       submittedModel: upstreamBody.model,
@@ -983,6 +1115,10 @@ async function handleApiRequest(req, res, requestId) {
       provider.type === "apiqik_videos"
         ? normalizeTaskResponse(await callSeedance(provider, `${provider.queryPathPrefix}${encodeURIComponent(taskId)}`))
         : await callSeedance(provider, `${provider.queryPathPrefix}${encodeURIComponent(taskId)}`);
+    await upsertTaskHistory(result, {
+      id: taskId,
+      submittedProvider: provider.id,
+    });
     return sendJson(res, 200, {
       task: result,
       submittedProvider: provider.id,

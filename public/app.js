@@ -10,6 +10,8 @@ const formMessage = document.querySelector("#form-message");
 const heroModel = document.querySelector("#hero-model");
 const heroPoll = document.querySelector("#hero-poll");
 const assetTipText = document.querySelector("#asset-tip-text");
+const historyListEl = document.querySelector("#history-list");
+const historyRefreshButton = document.querySelector("#history-refresh-button");
 
 const modelInput = document.querySelector("#model");
 const providerInput = document.querySelector("#provider");
@@ -40,6 +42,10 @@ const modeMeta = {
     title: "样片生成成片",
     description: "基于草稿任务 ID 生成更高质量的正式成片。",
   },
+  grok_imagine: {
+    title: "Grok Imagine Video",
+    description: "使用 ePhone 的 Grok Imagine Video Extensions 接口，支持文本、图片或视频素材生成 AI 视频。",
+  },
 };
 
 const providerModels = {
@@ -64,12 +70,14 @@ const providerModels = {
       "doubao-seedance-2-0-260128",
       "doubao-seedance-2-0-fast-260128",
     ],
+    grok_imagine: [],
   },
   ephone: {
     text_to_video: ["doubao-seedance-2-0-260128", "doubao-seedance-2-0-fast-260128"],
     image_to_video: ["doubao-seedance-2-0-260128", "doubao-seedance-2-0-fast-260128"],
     multi_reference: ["doubao-seedance-2-0-260128", "doubao-seedance-2-0-fast-260128"],
     draft_to_final: ["doubao-seedance-2-0-260128", "doubao-seedance-2-0-fast-260128"],
+    grok_imagine: ["grok-imagine-video/extensions", "grok-imagine-video/generations"],
   },
 };
 
@@ -81,6 +89,7 @@ let currentSubmittedProvider = "";
 let pollTimer = null;
 let pollIntervalMs = 3000;
 let modelTouched = false;
+let taskHistory = [];
 let healthState = {
   assetBaseIsLocal: true,
   assetBaseUrl: "",
@@ -180,11 +189,19 @@ function updateModeUI() {
   }
 
   updateModelOptions();
+  updateGrokControls();
 }
 
 function updateModelOptions() {
+  if (currentMode === "grok_imagine" && providerInput) {
+    providerInput.value = "ephone";
+  }
+
   const provider = providerInput?.value || "apiqik";
-  const models = providerModels[provider]?.[currentMode] || providerModels.apiqik.text_to_video;
+  const models =
+    providerModels[provider]?.[currentMode]?.length
+      ? providerModels[provider][currentMode]
+      : providerModels[provider]?.text_to_video || providerModels.apiqik.text_to_video;
   const previous = modelInput.value;
   modelInput.innerHTML = "";
 
@@ -198,13 +215,55 @@ function updateModelOptions() {
   modelInput.value = models.includes(previous) ? previous : models[0];
 }
 
+function updateGrokControls() {
+  const durationInput = document.querySelector("#duration");
+  const resolutionInput = document.querySelector("#resolution");
+  const aspectRatioInput = document.querySelector("#aspect_ratio");
+
+  if (!durationInput || !resolutionInput || !aspectRatioInput) {
+    return;
+  }
+
+  if (currentMode === "grok_imagine") {
+    durationInput.min = "1";
+    durationInput.max = "15";
+    if (Number.parseInt(durationInput.value, 10) < 1) {
+      durationInput.value = "8";
+    }
+
+    setSelectOptions(resolutionInput, ["720p", "480p"]);
+    setSelectOptions(aspectRatioInput, ["16:9", "9:16", "1:1", "4:3", "3:4", "3:2", "2:3"]);
+    return;
+  }
+
+  durationInput.min = "4";
+  durationInput.max = "15";
+  if (Number.parseInt(durationInput.value, 10) < 4) {
+    durationInput.value = "5";
+  }
+  setSelectOptions(resolutionInput, ["1080p", "720p", "480p"]);
+  setSelectOptions(aspectRatioInput, ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9", "adaptive"]);
+}
+
+function setSelectOptions(select, values) {
+  const previous = select.value;
+  select.innerHTML = "";
+  for (const value of values) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = value;
+    select.appendChild(option);
+  }
+  select.value = values.includes(previous) ? previous : values[0];
+}
+
 function updateAssetTip() {
   if (healthState.assetBaseIsLocal) {
     assetTipText.textContent =
       "当前素材 URL 基于本地地址生成。你可以从电脑选择文件，但如果服务仅运行在 localhost，上游模型通常无法读取这些本地链接。若要稳定使用本地素材，建议把服务部署到公网并配置 PUBLIC_BASE_URL。";
   } else {
     assetTipText.textContent =
-      `当前素材会暴露为 ${healthState.assetBaseUrl} 下的公开链接，可用于图生视频、多模态参考和样片工作流。`;
+      `当前素材会暴露为 ${healthState.assetBaseUrl} 下的公开链接，可用于图生视频、多模态参考、Grok Imagine 和样片工作流。`;
   }
 }
 
@@ -313,6 +372,78 @@ function renderTask(task, submittedModel = currentSubmittedModel, submittedMode 
   }
 }
 
+function renderHistory(items = taskHistory) {
+  if (!historyListEl) {
+    return;
+  }
+
+  historyListEl.innerHTML = "";
+  if (!Array.isArray(items) || items.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "history-empty";
+    empty.textContent = "还没有生成记录。提交任务后会自动保存在这里。";
+    historyListEl.appendChild(empty);
+    return;
+  }
+
+  for (const item of items) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "history-item";
+    button.dataset.taskId = item.id;
+
+    const title = document.createElement("strong");
+    title.textContent = item.prompt || item.id || "未命名任务";
+
+    const meta = document.createElement("span");
+    const modeText = modeMeta[item.submittedMode]?.title || item.submittedMode || "未知模式";
+    meta.textContent = `${modeText} · ${item.status || "unknown"} · ${formatUnixSeconds(item.created_at)}`;
+
+    const model = document.createElement("small");
+    model.textContent = item.submittedModel || "-";
+
+    button.append(title, meta, model);
+    historyListEl.appendChild(button);
+  }
+}
+
+async function loadHistory() {
+  try {
+    const data = await fetchJson("/api/history");
+    taskHistory = Array.isArray(data.items) ? data.items : [];
+    renderHistory();
+  } catch (error) {
+    if (historyListEl) {
+      historyListEl.innerHTML = "";
+      const empty = document.createElement("p");
+      empty.className = "history-empty";
+      empty.textContent = `历史记录加载失败：${error.message}`;
+      historyListEl.appendChild(empty);
+    }
+  }
+}
+
+function restoreHistoryItem(taskId) {
+  const item = taskHistory.find((record) => record.id === taskId);
+  if (!item) {
+    setMessage("没有找到这条历史记录。", "error");
+    return;
+  }
+
+  stopPolling();
+  resetOutputs();
+  currentTaskId = item.id || "";
+  currentSubmittedModel = item.submittedModel || "";
+  currentSubmittedMode = item.submittedMode || "";
+  currentSubmittedProvider = item.submittedProvider || "";
+  renderTask(item.task || item, currentSubmittedModel, currentSubmittedMode);
+
+  const status = item.task?.status || item.status;
+  if (["queued", "in_progress"].includes(status)) {
+    pollTimer = window.setTimeout(refreshTask, pollIntervalMs);
+  }
+}
+
 async function refreshTask() {
   if (!currentTaskId) {
     setMessage("还没有可刷新的任务。", "info");
@@ -325,6 +456,7 @@ async function refreshTask() {
       : "";
     const data = await fetchJson(`/api/tasks/${encodeURIComponent(currentTaskId)}${providerQuery}`);
     renderTask(data.task);
+    loadHistory();
 
     if (["queued", "in_progress"].includes(data.task.status)) {
       stopPolling();
@@ -419,7 +551,7 @@ async function buildPayload() {
     payload.callback_url = callbackUrl;
   }
 
-  if (currentMode !== "draft_to_final") {
+  if (!["draft_to_final", "grok_imagine"].includes(currentMode)) {
     payload.return_last_frame = getChecked("return_last_frame");
   }
 
@@ -460,6 +592,20 @@ async function buildPayload() {
       payload.reference_videos.length === 0
     ) {
       throw new Error("多模态参考模式至少需要一项参考图片、音频或视频。");
+    }
+  }
+
+  if (currentMode === "grok_imagine") {
+    payload.provider = "ephone";
+    payload.size = getInputValue("grok_size");
+
+    const imageUrl = await resolveSingleAsset("grok_image_file", "grok_image_url", "image", false);
+    const videoUrl = await resolveSingleAsset("grok_video_file", "grok_video_url", "video", false);
+    if (imageUrl) {
+      payload.image_url = imageUrl;
+    }
+    if (videoUrl) {
+      payload.video_url = videoUrl;
     }
   }
 
@@ -520,6 +666,7 @@ form.addEventListener("submit", async (event) => {
 
     currentSubmittedProvider = data.submittedProvider || payload.provider;
     renderTask(data.task, data.submittedModel, data.submittedMode);
+    loadHistory();
     if (data.task.id) {
       currentTaskId = data.task.id;
       pollTimer = window.setTimeout(refreshTask, pollIntervalMs);
@@ -532,6 +679,14 @@ form.addEventListener("submit", async (event) => {
 });
 
 refreshButton.addEventListener("click", refreshTask);
+historyRefreshButton?.addEventListener("click", loadHistory);
+historyListEl?.addEventListener("click", (event) => {
+  const button = event.target.closest(".history-item");
+  if (button?.dataset.taskId) {
+    restoreHistoryItem(button.dataset.taskId);
+  }
+});
 
 updateModeUI();
 loadHealth();
+loadHistory();

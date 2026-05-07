@@ -45,6 +45,7 @@
             <button type="button" class="mode-chip" data-mode="image_to_video">图生视频</button>
             <button type="button" class="mode-chip" data-mode="multi_reference">多模态参考</button>
             <button type="button" class="mode-chip" data-mode="draft_to_final">样片生成成片</button>
+            <button type="button" class="mode-chip" data-mode="grok_imagine">Grok Imagine</button>
           </div>
 
           <div class="mode-banner" id="mode-banner">
@@ -82,6 +83,8 @@
             <label class="field">
               <span>Model</span>
               <select id="model" name="model">
+                <option value="grok-imagine-video/extensions">grok-imagine-video/extensions</option>
+                <option value="grok-imagine-video/generations">grok-imagine-video/generations</option>
                 <option value="happyhorse-1.0-t2v">happyhorse-1.0-t2v</option>
                 <option value="happyhorse-1.0-i2v">happyhorse-1.0-i2v</option>
                 <option value="happyhorse-1.0-r2v">happyhorse-1.0-r2v</option>
@@ -117,12 +120,12 @@
               </select>
             </label>
 
-            <label class="field">
+            <label class="field mode-only" data-modes="text_to_video,image_to_video,multi_reference,draft_to_final">
               <span>Seed</span>
               <input id="seed" name="seed" type="number" min="-1" max="2147483647" value="-1" />
             </label>
 
-            <label class="field">
+            <label class="field mode-only" data-modes="text_to_video,image_to_video,multi_reference,draft_to_final">
               <span>Execution Expires After</span>
               <input
                 id="execution_expires_after"
@@ -133,7 +136,7 @@
               />
             </label>
 
-            <label class="field">
+            <label class="field mode-only" data-modes="text_to_video,image_to_video,multi_reference,draft_to_final">
               <span>FPS</span>
               <input type="text" value="24" disabled />
             </label>
@@ -146,6 +149,16 @@
                 type="text"
                 placeholder="填写草稿任务 ID，用于生成成片"
               />
+            </label>
+
+            <label class="field mode-only" data-modes="grok_imagine">
+              <span>Grok Size</span>
+              <select id="grok_size" name="grok_size">
+                <option value="1280x720">1280x720</option>
+                <option value="848x480">848x480</option>
+                <option value="1696x960">1696x960</option>
+                <option value="1920x1080">1920x1080</option>
+              </select>
             </label>
           </div>
 
@@ -171,6 +184,32 @@
               <label class="field">
                 <span>尾帧图片 URL</span>
                 <input id="last_frame_url" type="url" placeholder="可选：https://example.com/last-frame.png" />
+              </label>
+            </div>
+          </section>
+
+          <section class="asset-panel mode-only" data-modes="grok_imagine">
+            <div class="subsection-head">
+              <h3>Grok Imagine 素材</h3>
+              <p>只填 Prompt 即为文生视频；也可以上传或填写一张图片 URL，或一个视频 URL，后端会组装为 image/video 对象提交。</p>
+            </div>
+
+            <div class="asset-grid">
+              <label class="field">
+                <span>Grok 本地图片</span>
+                <input id="grok_image_file" type="file" accept="image/*" />
+              </label>
+              <label class="field">
+                <span>Grok 图片 URL</span>
+                <input id="grok_image_url" type="url" placeholder="可选：https://example.com/image.png" />
+              </label>
+              <label class="field">
+                <span>Grok 本地视频</span>
+                <input id="grok_video_file" type="file" accept="video/*" />
+              </label>
+              <label class="field">
+                <span>Grok 视频 URL</span>
+                <input id="grok_video_url" type="url" placeholder="可选：https://example.com/source.mp4" />
               </label>
             </div>
           </section>
@@ -228,7 +267,7 @@
               <input id="draft" name="draft" type="checkbox" />
               草稿模式 480p
             </label>
-            <label>
+            <label class="mode-only" data-modes="text_to_video,image_to_video,multi_reference,draft_to_final">
               <input id="watermark" name="watermark" type="checkbox" />
               添加水印
             </label>
@@ -310,6 +349,19 @@
           </div>
 
           <div class="output-list" id="output-list"></div>
+
+          <section class="history-panel">
+            <div class="history-head">
+              <div>
+                <p class="section-kicker">Generation Log</p>
+                <h3>生成历史</h3>
+              </div>
+              <button id="history-refresh-button" type="button" class="ghost history-refresh">刷新历史</button>
+            </div>
+            <div id="history-list" class="history-list">
+              <p class="history-empty">还没有生成记录。提交任务后会自动保存在这里。</p>
+            </div>
+          </section>
 
           <div class="timeline">
             <div class="timeline-step" data-status="queued">1. 已提交</div>

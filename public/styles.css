@@ -513,6 +513,74 @@ video {
   padding: 11px 14px;
 }
 
+.history-panel {
+  margin-top: 22px;
+  padding: 18px;
+  border-radius: 22px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.history-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+
+.history-head h3 {
+  margin: 6px 0 0;
+}
+
+.history-refresh {
+  cursor: pointer;
+}
+
+.history-list {
+  display: grid;
+  gap: 10px;
+  max-height: 320px;
+  overflow: auto;
+}
+
+.history-item {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+  padding: 14px;
+  text-align: left;
+  color: var(--text);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 16px;
+  background: rgba(4, 8, 20, 0.42);
+  cursor: pointer;
+  transition: transform 180ms ease, border-color 180ms ease, background 180ms ease;
+}
+
+.history-item:hover {
+  transform: translateY(-2px);
+  border-color: rgba(119, 243, 198, 0.45);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.history-item strong,
+.history-item span,
+.history-item small {
+  overflow-wrap: anywhere;
+}
+
+.history-item span,
+.history-item small,
+.history-empty {
+  color: var(--muted);
+}
+
+.history-empty {
+  margin: 0;
+  line-height: 1.7;
+}
+
 .timeline {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
