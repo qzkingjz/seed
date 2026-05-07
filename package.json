@@ -1,0 +1,10 @@
+{
+  "name": "seedance-web-studio",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Lightweight Seedance video generation web app",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  }
+}
