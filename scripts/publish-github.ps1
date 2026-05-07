@@ -55,8 +55,8 @@ if ($staged) {
 }
 
 Write-Step "Configuring remote"
-$existingRemote = & git -c "safe.directory=*" remote get-url origin 2>$null
-if ($LASTEXITCODE -eq 0 -and $existingRemote) {
+$remoteNames = & git -c "safe.directory=*" remote
+if ($remoteNames -contains "origin") {
   Invoke-Git remote set-url origin $RemoteUrl
 } else {
   Invoke-Git remote add origin $RemoteUrl
